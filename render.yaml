@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: run-and-bike-trainer-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: STRAVA_CLIENT_ID
+        sync: false
+      - key: STRAVA_CLIENT_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: GITHUB_STORAGE_TOKEN
+        sync: false
+      - key: GITHUB_STORAGE_OWNER
+        sync: false
+      - key: GITHUB_STORAGE_REPO
+        sync: false
+      - key: GITHUB_STORAGE_BRANCH
+        sync: false
