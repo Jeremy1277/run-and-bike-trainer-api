@@ -1,419 +1,514 @@
-/* ===========================================================
-   Run & Bike Trainer — design system
-   Univers : compteur de vélo embarqué, lecture nocturne, relief.
-   =========================================================== */
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+const Anthropic = require('@anthropic-ai/sdk');
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-:root {
-  --bg: #14171a;
-  --bg-raised: #1c2024;
-  --bg-card: #20242a;
-  --bg-card-hover: #262b32;
-  --line: #2e343b;
-  --line-bright: #3a424b;
-  --ink: #f5f3ee;
-  --ink-soft: #9aa1a9;
-  --ink-faint: #5c636b;
+const PORT = process.env.PORT || 3000;
+const STRAVA_CLIENT_ID = process.env.STRAVA_CLIENT_ID;
+const STRAVA_CLIENT_SECRET = process.env.STRAVA_CLIENT_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://jeremy1277.github.io/run-and-bike-trainer';
+const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 
-  --signal: #ff6b35;
-  --signal-dim: #4a2c1f;
-  --moss: #4fd1a5;
-  --moss-dim: #1f3d34;
-  --alert: #e8553f;
-  --alert-dim: #3d2420;
-  --amber: #f2b84b;
+// --- Coach IA (Claude API) ---
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
-  --shadow: rgba(0, 0, 0, 0.35);
-  --radius: 14px;
-  --radius-sm: 8px;
-}
+// --- Stockage : repo GitHub privé (Render efface le disque local à chaque mise en veille) ---
+const GITHUB_TOKEN = process.env.GITHUB_STORAGE_TOKEN; // PAT avec scope "repo"
+const GITHUB_OWNER = process.env.GITHUB_STORAGE_OWNER || 'Jeremy1277';
+const GITHUB_REPO = process.env.GITHUB_STORAGE_REPO || 'run-and-bike-trainer-data';
+const GITHUB_BRANCH = process.env.GITHUB_STORAGE_BRANCH || 'main';
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+const githubApi = axios.create({
+  baseURL: 'https://api.github.com',
+  headers: {
+    Authorization: `Bearer ${GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+  },
+});
 
-html { color-scheme: dark; }
-
-body {
-  background: var(--bg);
-  color: var(--ink);
-  font-family: 'Space Grotesk', sans-serif;
-  line-height: 1.5;
-  padding-bottom: 80px;
-  -webkit-font-smoothing: antialiased;
-}
-
-.mono { font-family: 'DM Mono', monospace; }
-
-a { color: inherit; text-decoration: none; }
-
-button {
-  font-family: 'Space Grotesk', sans-serif;
-  font-weight: 600;
-  font-size: 14px;
-  padding: 11px 20px;
-  border-radius: var(--radius-sm);
-  border: none;
-  cursor: pointer;
-  transition: transform 0.1s ease, opacity 0.15s ease, background 0.15s ease;
-}
-button:active { transform: scale(0.97); }
-button:disabled { opacity: 0.45; cursor: default; }
-
-.btn-signal { background: var(--signal); color: #1a0d06; }
-.btn-signal:hover:not(:disabled) { background: #ff7d4d; }
-.btn-ghost { background: transparent; color: var(--ink-soft); border: 1px solid var(--line-bright); }
-.btn-ghost:hover { border-color: var(--ink-soft); color: var(--ink); }
-.btn-small { padding: 6px 12px; font-size: 12px; border-radius: 6px; }
-.btn-danger-ghost { background: transparent; color: var(--alert); border: 1px solid #5c2e26; }
-.btn-danger-ghost:hover { background: var(--alert-dim); }
-
-.rbt-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 20px 24px;
-}
-.rbt-nav-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: 'DM Mono', monospace;
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  color: var(--ink-soft);
-}
-.rbt-nav-mark {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--signal);
-  flex-shrink: 0;
-}
-.rbt-nav-links { display: flex; gap: 4px; }
-.rbt-nav-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--ink-soft);
-}
-.rbt-nav-link svg { width: 16px; height: 16px; }
-.rbt-nav-link:hover { color: var(--ink); background: var(--bg-raised); }
-.rbt-nav-link.active { color: var(--signal); background: var(--signal-dim); }
-
-.relief-hero {
-  position: relative;
-  max-width: 1080px;
-  margin: 0 auto 8px;
-  padding: 8px 24px 36px;
-  overflow: hidden;
-}
-.relief-svg {
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  width: 100%;
-  height: 90px;
-  opacity: 0.5;
-  pointer-events: none;
-}
-.relief-content { position: relative; z-index: 1; }
-.relief-eyebrow {
-  font-family: 'DM Mono', monospace;
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--signal);
-  margin-bottom: 10px;
-}
-.relief-title {
-  font-size: 34px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  margin-bottom: 6px;
-}
-.relief-sub { color: var(--ink-soft); font-size: 15px; }
-
-.status-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 22px;
-  font-family: 'DM Mono', monospace;
-  font-size: 13px;
-  flex-wrap: wrap;
-}
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--moss); flex-shrink: 0; }
-.dot.off { background: var(--ink-faint); }
-
-main { max-width: 1080px; margin: 0 auto; padding: 8px 24px 24px; }
-
-.empty-state { text-align: center; padding: 90px 24px; color: var(--ink-soft); }
-.empty-state h2 { color: var(--ink); font-size: 22px; margin-bottom: 8px; font-weight: 600; }
-
-.loading-msg { text-align: center; padding: 70px; color: var(--ink-faint); font-family: 'DM Mono', monospace; font-size: 13px; }
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-  margin-bottom: 24px;
-}
-.stat-card {
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 16px 18px;
-}
-.stat-card .label {
-  font-family: 'DM Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 8px;
-}
-.stat-card .value { font-size: 28px; font-weight: 700; line-height: 1; font-family: 'DM Mono', monospace; }
-.stat-card .value .unit { font-size: 13px; font-weight: 500; color: var(--ink-soft); margin-left: 4px; font-family: 'Space Grotesk', sans-serif; }
-
-.panel {
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 24px;
-  margin-bottom: 20px;
-}
-.panel h3 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
-.panel .panel-sub { color: var(--ink-soft); font-size: 13px; margin-bottom: 18px; }
-.panel-head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
-
-.activity-row {
-  display: grid;
-  grid-template-columns: 84px 1fr 76px 70px 70px 64px 70px 90px;
-  gap: 10px;
-  align-items: center;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 14px;
-}
-.activity-row:last-child { border-bottom: none; }
-.activity-row.excluded { opacity: 0.35; }
-.activity-row .date {
-  font-family: 'DM Mono', monospace;
-  font-size: 12px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  border-bottom: 1px dashed var(--ink-faint);
-  width: fit-content;
-}
-.activity-row .date:hover { color: var(--signal); border-color: var(--signal); }
-.activity-row .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-row .metric { font-family: 'DM Mono', monospace; font-size: 13px; text-align: right; color: var(--ink-soft); }
-.activity-row .metric strong { color: var(--ink); font-weight: 500; }
-.activity-row .source {
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  text-align: center;
-  padding: 3px 4px;
-  border-radius: 5px;
-  background: var(--bg-raised);
-}
-.activity-row .action { text-align: right; }
-
-.row-head {
-  display: grid;
-  grid-template-columns: 84px 1fr 76px 70px 70px 64px 70px 90px;
-  gap: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line-bright);
-  font-family: 'DM Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-}
-.row-head .metric { text-align: right; }
-.row-head .action { text-align: right; }
-
-@media (max-width: 720px) {
-  .activity-row, .row-head { grid-template-columns: 64px 1fr 56px 70px; }
-  .activity-row > *:nth-child(3), .activity-row > *:nth-child(4),
-  .activity-row > *:nth-child(6),
-  .row-head > *:nth-child(3), .row-head > *:nth-child(4),
-  .row-head > *:nth-child(6) { display: none; }
+// Lit un fichier JSON depuis le repo de stockage. Renvoie fallback si le fichier n'existe pas encore.
+async function readJSON(filePath, fallback) {
+  try {
+    const res = await githubApi.get(
+      `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}`,
+      { params: { ref: GITHUB_BRANCH } }
+    );
+    const content = Buffer.from(res.data.content, 'base64').toString('utf-8');
+    return JSON.parse(content);
+  } catch (err) {
+    if (err.response?.status === 404) return fallback;
+    throw err;
+  }
 }
 
-.insight { display: flex; gap: 14px; padding: 16px; border-radius: var(--radius-sm); margin-bottom: 12px; align-items: flex-start; }
-.insight.up { background: var(--moss-dim); }
-.insight.down { background: var(--alert-dim); }
-.insight.neutral { background: var(--bg-raised); }
-.insight .icon {
-  font-family: 'DM Mono', monospace;
-  font-size: 20px;
-  font-weight: 700;
-  width: 26px;
-  text-align: center;
-  flex-shrink: 0;
-}
-.insight.up .icon { color: var(--moss); }
-.insight.down .icon { color: var(--alert); }
-.insight.neutral .icon { color: var(--ink-faint); }
-.insight .text { font-size: 14px; }
-.insight .text strong { font-weight: 600; }
-.insight .text .detail { color: var(--ink-soft); font-size: 13px; margin-top: 3px; }
-.insight .tag {
-  display: inline-block;
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 4px;
-  margin-left: 6px;
-  background: var(--amber);
-  color: #2e1f04;
-  vertical-align: middle;
+// Écrit un fichier JSON dans le repo de stockage (pattern fetch SHA -> PUT base64).
+async function writeJSON(filePath, data) {
+  let sha;
+  try {
+    const existing = await githubApi.get(
+      `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}`,
+      { params: { ref: GITHUB_BRANCH } }
+    );
+    sha = existing.data.sha;
+  } catch (err) {
+    if (err.response?.status !== 404) throw err;
+  }
+
+  const content = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
+  await githubApi.put(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}`, {
+    message: `Update ${filePath}`,
+    content,
+    branch: GITHUB_BRANCH,
+    sha,
+  });
 }
 
-.coach-panel { border-color: var(--signal-dim); background: linear-gradient(135deg, var(--bg-card) 0%, #241f1a 100%); }
-.coach-text { font-size: 15px; line-height: 1.7; white-space: pre-wrap; color: var(--ink); }
-.coach-text strong { font-weight: 600; color: var(--signal); }
-.coach-meta { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 16px; }
-.coach-vigilance {
-  margin-top: 16px;
-  padding: 12px 14px;
-  background: var(--alert-dim);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  color: #f3c4bc;
-  display: flex;
-  gap: 10px;
+const TOKENS_FILE = 'tokens.json';
+const ACTIVITIES_FILE = 'activities.json';
+const EXCLUDED_FILE = 'excluded_activities.json';
+const COACH_FILE = 'coach_advice.json';
+const DATE_OVERRIDES_FILE = 'date_overrides.json';
+
+function getTokens() {
+  return readJSON(TOKENS_FILE, null);
 }
 
-.timeline { position: relative; padding-left: 36px; }
-.timeline::before {
-  content: '';
-  position: absolute;
-  left: 11px; top: 6px; bottom: 6px;
-  width: 2px;
-  background: var(--line-bright);
+function saveTokens(tokens) {
+  return writeJSON(TOKENS_FILE, tokens);
 }
-.timeline-item { position: relative; padding-bottom: 22px; }
-.timeline-item:last-child { padding-bottom: 0; }
-.timeline-dot {
-  position: absolute;
-  left: -36px; top: 2px;
-  width: 24px; height: 24px;
-  border-radius: 50%;
-  background: var(--bg-raised);
-  border: 2px solid var(--line-bright);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.timeline-dot:hover { border-color: var(--signal); }
-.timeline-dot.done { background: var(--moss); border-color: var(--moss); }
-.timeline-dot svg { width: 13px; height: 13px; color: var(--bg); opacity: 0; transition: opacity 0.15s; }
-.timeline-dot.done svg { opacity: 1; }
-.timeline-card {
-  background: var(--bg-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-}
-.timeline-item.done .timeline-card { opacity: 0.5; }
-.timeline-item.done .timeline-title { text-decoration: line-through; }
-.timeline-title { font-weight: 600; font-size: 14.5px; margin-bottom: 4px; }
-.timeline-meta {
-  display: flex;
-  gap: 10px;
-  font-family: 'DM Mono', monospace;
-  font-size: 11px;
-  color: var(--ink-faint);
-  margin-bottom: 6px;
-  flex-wrap: wrap;
-}
-.timeline-meta span { display: flex; align-items: center; gap: 4px; }
-.timeline-badge {
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: var(--bg-card);
-  border: 1px solid var(--line-bright);
-}
-.timeline-objectif { font-size: 13px; color: var(--ink-soft); }
 
-.map-search-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-.map-search-row input[type="text"] {
-  flex: 1;
-  min-width: 180px;
-  background: var(--bg-raised);
-  border: 1px solid var(--line-bright);
-  color: var(--ink);
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 14px;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-}
-.map-search-row input[type="text"]:focus { outline: none; border-color: var(--signal); }
-#map-canvas {
-  width: 100%;
-  height: 360px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-raised);
-  margin-bottom: 12px;
-}
-.map-result-list { display: flex; flex-direction: column; gap: 8px; }
-.map-result-item {
-  background: var(--bg-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-.map-result-name { font-weight: 500; font-size: 14px; }
-.map-result-meta { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--ink-faint); }
+// --- Rafraîchit l'access_token si nécessaire (expire après 6h) ---
+async function getValidAccessToken() {
+  const tokens = await getTokens();
+  if (!tokens) {
+    throw new Error('NOT_CONNECTED');
+  }
 
-.rbt-modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.6);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 100;
-  padding: 20px;
-}
-.rbt-modal {
-  background: var(--bg-card);
-  border: 1px solid var(--line-bright);
-  border-radius: var(--radius);
-  padding: 24px;
-  max-width: 360px;
-  width: 100%;
-}
-.rbt-modal h4 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
-.rbt-modal .modal-sub { font-size: 13px; color: var(--ink-soft); margin-bottom: 16px; }
-.rbt-modal input[type="date"] {
-  width: 100%;
-  background: var(--bg-raised);
-  border: 1px solid var(--line-bright);
-  color: var(--ink);
-  font-family: 'DM Mono', monospace;
-  font-size: 14px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  margin-bottom: 16px;
-}
-.rbt-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  const now = Math.floor(Date.now() / 1000);
+  if (tokens.expires_at && tokens.expires_at > now + 60) {
+    return tokens.access_token;
+  }
 
-canvas { width: 100% !important; max-height: 320px; }
+  // Token expiré ou proche de l'expiration -> refresh
+  const response = await axios.post('https://www.strava.com/oauth/token', {
+    client_id: STRAVA_CLIENT_ID,
+    client_secret: STRAVA_CLIENT_SECRET,
+    grant_type: 'refresh_token',
+    refresh_token: tokens.refresh_token,
+  });
 
-@media (max-width: 640px) {
-  .rbt-nav-link span { display: none; }
-  .relief-title { font-size: 26px; }
+  const newTokens = {
+    access_token: response.data.access_token,
+    refresh_token: response.data.refresh_token,
+    expires_at: response.data.expires_at,
+    athlete: tokens.athlete,
+  };
+  await saveTokens(newTokens);
+  return newTokens.access_token;
 }
+
+// --- Route 1 : démarre le flow OAuth ---
+app.get('/auth/strava', (req, res) => {
+  const redirectUri = `${BACKEND_URL}/callback`;
+  const scope = 'read,activity:read_all,profile:read_all';
+  const authUrl = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&approval_prompt=auto&scope=${scope}`;
+  res.redirect(authUrl);
+});
+
+// --- Route 2 : callback Strava, échange le code contre les tokens ---
+app.get('/callback', async (req, res) => {
+  const { code, error } = req.query;
+
+  if (error) {
+    return res.redirect(`${FRONTEND_URL}?strava_error=${encodeURIComponent(error)}`);
+  }
+
+  if (!code) {
+    return res.status(400).send('Code OAuth manquant');
+  }
+
+  try {
+    const response = await axios.post('https://www.strava.com/oauth/token', {
+      client_id: STRAVA_CLIENT_ID,
+      client_secret: STRAVA_CLIENT_SECRET,
+      code,
+      grant_type: 'authorization_code',
+    });
+
+    const tokens = {
+      access_token: response.data.access_token,
+      refresh_token: response.data.refresh_token,
+      expires_at: response.data.expires_at,
+      athlete: response.data.athlete,
+    };
+    await saveTokens(tokens);
+
+    res.redirect(`${FRONTEND_URL}?connected=true`);
+  } catch (err) {
+    console.error('Erreur échange token:', err.response?.data || err.message);
+    res.redirect(`${FRONTEND_URL}?strava_error=token_exchange_failed`);
+  }
+});
+
+// --- Route 3 : statut de connexion ---
+app.get('/api/status', async (req, res) => {
+  try {
+    const tokens = await getTokens();
+    res.json({
+      connected: !!tokens,
+      athlete: tokens?.athlete
+        ? { id: tokens.athlete.id, firstname: tokens.athlete.firstname, lastname: tokens.athlete.lastname }
+        : null,
+    });
+  } catch (err) {
+    console.error('Erreur status:', err.response?.data || err.message);
+    res.status(500).json({ error: 'status_failed' });
+  }
+});
+
+// --- Route 4 : synchronise les activités depuis Strava ---
+app.get('/api/sync', async (req, res) => {
+  try {
+    const accessToken = await getValidAccessToken();
+    const perPage = 100;
+    let page = 1;
+    let allActivities = [];
+
+    while (true) {
+      const response = await axios.get('https://www.strava.com/api/v3/athlete/activities', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { per_page: perPage, page },
+      });
+
+      if (response.data.length === 0) break;
+      allActivities = allActivities.concat(response.data);
+      if (response.data.length < perPage) break;
+      page++;
+      if (page > 20) break; // garde-fou
+    }
+
+    await writeJSON(ACTIVITIES_FILE, { last_sync: new Date().toISOString(), activities: allActivities });
+
+    res.json({ synced: allActivities.length, last_sync: new Date().toISOString() });
+
+    // Génère les conseils coach en arrière-plan, sans bloquer la réponse du sync.
+    // Ne fait planter rien si ça échoue (ex: clé API manquante) — juste loggé.
+    generateCoachAdvice(allActivities).catch((err) => {
+      console.error('Coach (arrière-plan) — erreur non bloquante:', err.response?.data || err.message);
+    });
+  } catch (err) {
+    if (err.message === 'NOT_CONNECTED') {
+      return res.status(401).json({ error: 'not_connected' });
+    }
+    console.error('Erreur sync:', err.response?.data || err.message);
+    res.status(500).json({ error: 'sync_failed' });
+  }
+});
+
+// --- Route 5 : sert les activités stockées au frontend ---
+app.get('/api/activities', async (req, res) => {
+  try {
+    const data = await readJSON(ACTIVITIES_FILE, { last_sync: null, activities: [] });
+    res.json(data);
+  } catch (err) {
+    console.error('Erreur lecture activités:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
+// --- Route 6 : détail d'une activité (zones FC, streams) ---
+app.get('/api/activities/:id', async (req, res) => {
+  try {
+    const accessToken = await getValidAccessToken();
+    const response = await axios.get(
+      `https://www.strava.com/api/v3/activities/${req.params.id}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    res.json(response.data);
+  } catch (err) {
+    if (err.message === 'NOT_CONNECTED') {
+      return res.status(401).json({ error: 'not_connected' });
+    }
+    console.error('Erreur détail activité:', err.response?.data || err.message);
+    res.status(500).json({ error: 'fetch_failed' });
+  }
+});
+
+// --- Route 7 : exclure une activité de l'analyse (doublon GPS/Strava, etc.) ---
+app.post('/api/activities/:id/exclude', async (req, res) => {
+  try {
+    const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+    const id = Number(req.params.id);
+    if (!excluded.ids.includes(id)) excluded.ids.push(id);
+    await writeJSON(EXCLUDED_FILE, excluded);
+    res.json({ excluded: excluded.ids });
+  } catch (err) {
+    console.error('Erreur exclusion:', err.response?.data || err.message);
+    res.status(500).json({ error: 'exclude_failed' });
+  }
+});
+
+// --- Route 8 : ré-inclure une activité précédemment exclue ---
+app.post('/api/activities/:id/include', async (req, res) => {
+  try {
+    const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+    const id = Number(req.params.id);
+    excluded.ids = excluded.ids.filter((x) => x !== id);
+    await writeJSON(EXCLUDED_FILE, excluded);
+    res.json({ excluded: excluded.ids });
+  } catch (err) {
+    console.error('Erreur ré-inclusion:', err.response?.data || err.message);
+    res.status(500).json({ error: 'include_failed' });
+  }
+});
+
+// --- Route 9 : liste des activités exclues ---
+app.get('/api/excluded', async (req, res) => {
+  try {
+    const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+    res.json(excluded);
+  } catch (err) {
+    console.error('Erreur lecture exclusions:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
+// --- Corrections de date locales : Strava n'expose pas de modification de start_date via API,
+// donc on stocke une surcharge côté backend, appliquée uniquement à l'affichage/aux calculs. ---
+app.post('/api/activities/:id/date', async (req, res) => {
+  try {
+    const { date } = req.body;
+    if (!date || isNaN(new Date(date).getTime())) {
+      return res.status(400).json({ error: 'invalid_date' });
+    }
+    const overrides = await readJSON(DATE_OVERRIDES_FILE, {});
+    overrides[req.params.id] = date;
+    await writeJSON(DATE_OVERRIDES_FILE, overrides);
+    res.json({ id: req.params.id, date });
+  } catch (err) {
+    console.error('Erreur correction de date:', err.response?.data || err.message);
+    res.status(500).json({ error: 'date_override_failed' });
+  }
+});
+
+app.delete('/api/activities/:id/date', async (req, res) => {
+  try {
+    const overrides = await readJSON(DATE_OVERRIDES_FILE, {});
+    delete overrides[req.params.id];
+    await writeJSON(DATE_OVERRIDES_FILE, overrides);
+    res.json({ id: req.params.id });
+  } catch (err) {
+    console.error('Erreur suppression correction de date:', err.response?.data || err.message);
+    res.status(500).json({ error: 'date_override_failed' });
+  }
+});
+
+app.get('/api/date-overrides', async (req, res) => {
+  try {
+    const overrides = await readJSON(DATE_OVERRIDES_FILE, {});
+    res.json(overrides);
+  } catch (err) {
+    console.error('Erreur lecture corrections de date:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
+// --- Construit un résumé compact des données pour limiter les tokens envoyés à Claude ---
+function buildAthleteSummary(activities, excludedIds) {
+  const usable = activities.filter((a) => !excludedIds.includes(a.id));
+
+  const bySport = { Ride: [], Run: [] };
+  usable.forEach((a) => {
+    const sport = a.type === 'Run' ? 'Run' : a.type === 'Ride' ? 'Ride' : null;
+    if (sport) bySport[sport].push(a);
+  });
+
+  function summarizeSport(arr) {
+    const sorted = [...arr].sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+    const last10 = sorted.slice(0, 10).map((a) => ({
+      date: a.start_date.slice(0, 10),
+      nom: a.name,
+      distance_km: +(a.distance / 1000).toFixed(1),
+      d_plus_m: Math.round(a.total_elevation_gain || 0),
+      duree_min: Math.round(a.moving_time / 60),
+      vitesse_moy_kmh: +((a.average_speed || 0) * 3.6).toFixed(1),
+      fc_moy: a.average_heartrate ? Math.round(a.average_heartrate) : null,
+      fc_max: a.max_heartrate ? Math.round(a.max_heartrate) : null,
+    }));
+    return { nombre_total: arr.length, dix_dernieres_sorties: last10 };
+  }
+
+  return {
+    velo: summarizeSport(bySport.Ride),
+    course: summarizeSport(bySport.Run),
+  };
+}
+
+// --- Génère les conseils coach via Claude pour UN sport donné, en sortie JSON structurée. ---
+async function generateCoachAdviceForSport(sport, activities, completedSeanceIds) {
+  if (!anthropic) {
+    throw new Error('ANTHROPIC_API_KEY manquante côté serveur.');
+  }
+
+  const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+  const fullSummary = buildAthleteSummary(activities || [], excluded.ids || []);
+  const sportData = sport === 'velo' ? fullSummary.velo : fullSummary.course;
+
+  const sportLabel = sport === 'velo' ? 'cyclisme gravel' : 'course à pied';
+  const contextNote = sport === 'velo'
+    ? 'Point faible identifié : grosse perte de vitesse dès que ça grimpe (FC qui sature en montée), bonne aisance sur plat/descente.'
+    : 'Prépare un semi-marathon en octobre 2026, 2 sorties par semaine actuellement.';
+
+  const prompt = `Tu es un coach sportif expérimenté, spécialisé en ${sportLabel} pour adultes amateurs reprenant une pratique régulière.
+
+Profil de l'athlète : 48 ans, 85 kg, pratique depuis mars 2026 (quasi débutant avant). ${contextNote}
+
+Voici ses dernières sorties ${sportLabel} (JSON) :
+${JSON.stringify(sportData, null, 2)}
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, sans balises markdown, selon ce schéma exact :
+{
+  "constat": "3-4 phrases factuelles en français, tutoiement, sur la tendance récente observée dans les données",
+  "seances": [
+    {
+      "titre": "Titre court de la séance (ex: Sortie seuil en côte)",
+      "type_terrain": "plat" | "vallonne" | "montagneux",
+      "duree_min": nombre en minutes,
+      "zone_fc_cible": "ex: Z3 (138-155 bpm)",
+      "objectif": "1 phrase expliquant pourquoi cette séance maintenant"
+    }
+  ],
+  "vigilance": "1-2 phrases sur un point de vigilance (surcharge, récupération, risque), ou null si rien à signaler"
+}
+
+Propose entre 2 et 4 séances, dans un ordre logique de progression (la première à faire en premier). Reste factuel et basé sur les données fournies. Si les données sont insuffisantes, dis-le dans le constat plutôt que d'inventer, et propose des séances prudentes et génériques adaptées au profil.`;
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1500,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const rawText = message.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+
+  let parsed;
+  try {
+    // Au cas où Claude entoure malgré tout sa réponse de ```json ... ```
+    const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '');
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    throw new Error(`Réponse du coach IA non parsable en JSON: ${e.message}`);
+  }
+
+  // Attribue un id stable à chaque séance pour pouvoir cocher/décocher côté frontend.
+  const seances = (parsed.seances || []).map((s, i) => ({
+    id: `${sport}-${Date.now()}-${i}`,
+    done: completedSeanceIds?.includes(`${sport}-${i}-${s.titre}`) || false,
+    ...s,
+  }));
+
+  return {
+    generated_at: new Date().toISOString(),
+    constat: parsed.constat || '',
+    seances,
+    vigilance: parsed.vigilance || null,
+  };
+}
+
+// --- Génère et sauvegarde les conseils pour les deux sports. Réutilisée par le sync auto et la route manuelle. ---
+async function generateCoachAdvice(activities) {
+  const existing = await readJSON(COACH_FILE, { velo: null, course: null, seances_status: {} });
+  const status = existing.seances_status || {};
+
+  const [veloAdvice, courseAdvice] = await Promise.all([
+    generateCoachAdviceForSport('velo', activities, Object.keys(status)).catch((err) => {
+      console.error('Coach vélo — erreur:', err.message);
+      return null;
+    }),
+    generateCoachAdviceForSport('course', activities, Object.keys(status)).catch((err) => {
+      console.error('Coach course — erreur:', err.message);
+      return null;
+    }),
+  ]);
+
+  const result = {
+    velo: veloAdvice,
+    course: courseAdvice,
+    seances_status: status,
+  };
+
+  await writeJSON(COACH_FILE, result);
+  return result;
+}
+
+// --- Route 10 : génère (ou régénère) les conseils du coach IA manuellement, pour les deux sports ---
+app.post('/api/coach/generate', async (req, res) => {
+  try {
+    const data = await readJSON(ACTIVITIES_FILE, { activities: [] });
+    const advice = await generateCoachAdvice(data.activities || []);
+    if (!advice.velo && !advice.course) {
+      return res.status(503).json({ error: 'coach_not_configured', message: 'ANTHROPIC_API_KEY manquante ou erreur de génération côté serveur.' });
+    }
+    res.json(advice);
+  } catch (err) {
+    if (err.message?.includes('ANTHROPIC_API_KEY')) {
+      return res.status(503).json({ error: 'coach_not_configured', message: err.message });
+    }
+    console.error('Erreur coach:', err.response?.data || err.message);
+    res.status(500).json({ error: 'coach_failed' });
+  }
+});
+
+// --- Route 11 : récupère les derniers conseils générés (sans relancer Claude) ---
+app.get('/api/coach', async (req, res) => {
+  try {
+    const advice = await readJSON(COACH_FILE, null);
+    res.json(advice || { velo: null, course: null, seances_status: {} });
+  } catch (err) {
+    console.error('Erreur lecture coach:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
+// --- Route 12 : marque une séance comme faite / pas faite (persisté pour survivre aux régénérations) ---
+app.post('/api/coach/seance/:id/toggle', async (req, res) => {
+  try {
+    const advice = await readJSON(COACH_FILE, { velo: null, course: null, seances_status: {} });
+    const id = req.params.id;
+    const status = advice.seances_status || {};
+    status[id] = !status[id];
+
+    ['velo', 'course'].forEach((sport) => {
+      if (advice[sport]?.seances) {
+        advice[sport].seances = advice[sport].seances.map((s) =>
+          s.id === id ? { ...s, done: status[id] } : s
+        );
+      }
+    });
+
+    advice.seances_status = status;
+    await writeJSON(COACH_FILE, advice);
+    res.json({ id, done: status[id] });
+  } catch (err) {
+    console.error('Erreur toggle séance:', err.response?.data || err.message);
+    res.status(500).json({ error: 'toggle_failed' });
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send('Run & Bike Trainer API — OK');
+});
+
+app.listen(PORT, () => {
+  console.log(`Serveur démarré sur le port ${PORT}`);
+});
