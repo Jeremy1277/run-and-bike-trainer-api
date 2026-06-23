@@ -365,38 +365,47 @@ async function generateCoachAdviceForSport(sport, activities, completedSeanceIds
     ? 'Point faible identifié : grosse perte de vitesse dès que ça grimpe (FC qui sature en montée), bonne aisance sur plat/descente.'
     : 'Prépare un semi-marathon en octobre 2026, 2 sorties par semaine actuellement.';
 
-  const prompt = `Tu es un coach sportif expérimenté, spécialisé en ${sportLabel} pour adultes amateurs reprenant une pratique régulière.
+  const speedHint = sport === 'velo'
+    ? 'vitesse en km/h (ex: 16-18 km/h en montée, 25-28 km/h sur plat)'
+    : 'allure en min/km (ex: 6:30-7:00 min/km en endurance, 5:30 min/km en seuil)';
+
+  const prompt = `Tu es un coach sportif expérimenté, spécialisé en ${sportLabel} pour adultes amateurs reprenant une pratique régulière. Ton coaching doit être chiffré et exécutable sur le terrain — jamais une généralité du type "sortie facile" sans dire combien de temps, combien de km, à quelle FC et à quel rythme exactement.
 
 Profil de l'athlète : 48 ans, 85 kg, pratique depuis mars 2026 (quasi débutant avant). ${contextNote}
 
-Voici ses dernières sorties ${sportLabel} (JSON) :
+Voici ses dernières sorties ${sportLabel} (JSON, avec distance, D+, durée, vitesse moyenne et FC moyenne/max par sortie) :
 ${JSON.stringify(sportData, null, 2)}
 
 Réponds UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, sans balises markdown, selon ce schéma exact :
 {
-  "constat": "3-4 phrases factuelles en français, tutoiement, sur la tendance récente observée dans les données",
+  "constat": "3-4 phrases factuelles en français, tutoiement, sur la tendance récente observée dans les données, avec au moins un chiffre concret tiré des sorties (ex: ta FC moyenne est passée de X à Y bpm)",
   "seances": [
     {
       "titre": "Titre court de la séance (ex: Sortie seuil en côte)",
       "type_terrain": "plat" | "vallonne" | "montagneux",
       "duree_min": nombre en minutes,
+      "distance_cible_km": nombre, distance totale visée pour toute la séance, déduite de la durée et d'une allure réaliste pour cet athlète,
       "zone_fc_cible": "ex: Z3 (138-155 bpm)",
       "objectif": "1 phrase expliquant pourquoi cette séance maintenant",
-      "explication": "3-5 phrases en tutoiement expliquant le déroulé de la séance, pourquoi cette structure, et un conseil d'exécution concret",
+      "explication": "4-6 phrases en tutoiement expliquant le déroulé de la séance, pourquoi cette structure compte tenu de ses données récentes, et comment ajuster en temps réel si la FC dérive au-dessus ou en-dessous de la cible",
       "blocs": [
-        { "phase": "Échauffement", "duree_min": nombre, "zone_fc": "ex: Z1-Z2", "description": "ce qu'il faut faire pendant ce bloc" },
-        { "phase": "Bloc effort 1", "duree_min": nombre, "zone_fc": "ex: Z4", "description": "..." },
-        { "phase": "Récupération", "duree_min": nombre, "zone_fc": "ex: Z1", "description": "..." },
-        { "phase": "Retour au calme", "duree_min": nombre, "zone_fc": "ex: Z1", "description": "..." }
+        {
+          "phase": "Échauffement",
+          "duree_min": nombre,
+          "distance_km": nombre approximatif,
+          "zone_fc": "ex: Z1-Z2 (100-120 bpm)",
+          "rythme_cible": "${speedHint}",
+          "description": "ce qu'il faut faire pendant ce bloc, en une phrase concrète et actionnable"
+        }
       ]
     }
   ],
-  "vigilance": "1-2 phrases sur un point de vigilance (surcharge, récupération, risque), ou null si rien à signaler"
+  "vigilance": "1-2 phrases sur un point de vigilance (surcharge, récupération, risque), avec un chiffre si pertinent (ex: ta FC moyenne dépasse Z4 sur 60% du temps de tes 3 dernières sorties), ou null si rien à signaler"
 }
 
-Pour "blocs", découpe la séance en étapes chronologiques réelles (échauffement, puis répétitions d'efforts si pertinent avec leurs récup intercalées, puis retour au calme). La somme des duree_min des blocs doit être cohérente avec duree_min de la séance. Adapte le nombre de blocs à la séance (une sortie d'endurance longue peut n'avoir que 2-3 blocs, une séance de fractionné peut en avoir 6-8 en répétant le motif effort/récup).
+Chaque bloc doit avoir : sa durée en minutes, sa distance approximative en km, sa zone de FC avec les bpm exacts (déduits des données de fréquence cardiaque déjà observées chez cet athlète, pas des zones théoriques génériques), et son rythme cible (vitesse km/h pour le vélo, allure min/km pour la course). Découpe en étapes chronologiques réelles : échauffement, puis répétitions d'efforts si pertinent avec leurs récup intercalées, puis retour au calme. La somme des duree_min et distance_km des blocs doit être cohérente avec duree_min et distance_cible_km de la séance globale. Adapte le nombre de blocs à la séance (une sortie d'endurance longue peut n'avoir que 2-3 blocs, une séance de fractionné peut en avoir 6-8 en répétant le motif effort/récup).
 
-Propose entre 2 et 4 séances, dans un ordre logique de progression (la première à faire en premier). Reste factuel et basé sur les données fournies. Si les données sont insuffisantes, dis-le dans le constat plutôt que d'inventer, et propose des séances prudentes et génériques adaptées au profil.`;
+Propose entre 2 et 4 séances, dans un ordre logique de progression (la première à faire en premier). Reste factuel et basé sur les données fournies — utilise les vraies FC et vitesses déjà observées chez cet athlète pour calibrer tes cibles, ne sors pas des zones FC standard de manuel si les données montrent un profil différent. Si les données sont insuffisantes, dis-le dans le constat plutôt que d'inventer, et propose des séances prudentes avec des chiffres de débutant raisonnables (FC sous 140 bpm, allure très modérée).`;
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
