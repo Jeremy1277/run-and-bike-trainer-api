@@ -405,11 +405,11 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après,
 
 Chaque bloc doit avoir : sa durée en minutes, sa distance approximative en km, sa zone de FC avec les bpm exacts (déduits des données de fréquence cardiaque déjà observées chez cet athlète, pas des zones théoriques génériques), et son rythme cible (vitesse km/h pour le vélo, allure min/km pour la course). Découpe en étapes chronologiques réelles : échauffement, puis répétitions d'efforts si pertinent avec leurs récup intercalées, puis retour au calme. La somme des duree_min et distance_km des blocs doit être cohérente avec duree_min et distance_cible_km de la séance globale. Adapte le nombre de blocs à la séance (une sortie d'endurance longue peut n'avoir que 2-3 blocs, une séance de fractionné peut en avoir 6-8 en répétant le motif effort/récup).
 
-Propose entre 2 et 4 séances, dans un ordre logique de progression (la première à faire en premier). Reste factuel et basé sur les données fournies — utilise les vraies FC et vitesses déjà observées chez cet athlète pour calibrer tes cibles, ne sors pas des zones FC standard de manuel si les données montrent un profil différent. Si les données sont insuffisantes, dis-le dans le constat plutôt que d'inventer, et propose des séances prudentes avec des chiffres de débutant raisonnables (FC sous 140 bpm, allure très modérée).`;
+Propose entre 2 et 3 séances maximum (pas plus), dans un ordre logique de progression (la première à faire en premier). Limite chaque séance à 5 blocs maximum. Garde "description" et "explication" concis (1-2 phrases courtes), l'objectif est la précision chiffrée, pas la longueur du texte. Reste factuel et basé sur les données fournies — utilise les vraies FC et vitesses déjà observées chez cet athlète pour calibrer tes cibles, ne sors pas des zones FC standard de manuel si les données montrent un profil différent. Si les données sont insuffisantes, dis-le dans le constat plutôt que d'inventer, et propose des séances prudentes avec des chiffres de débutant raisonnables (FC sous 140 bpm, allure très modérée).`;
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 3000,
+    max_tokens: 4096,
     messages: [{ role: 'user', content: prompt }],
   });
 
