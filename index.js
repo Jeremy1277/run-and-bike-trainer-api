@@ -278,6 +278,37 @@ app.get('/api/excluded', async (req, res) => {
   }
 });
 
+// --- Construit un résumé compact des données pour limiter les tokens envoyés à Claude ---
+function buildAthleteSummary(activities, excludedIds) {
+  const usable = activities.filter((a) => !excludedIds.includes(a.id));
+
+  const bySport = { Ride: [], Run: [] };
+  usable.forEach((a) => {
+    const sport = a.type === 'Run' ? 'Run' : a.type === 'Ride' ? 'Ride' : null;
+    if (sport) bySport[sport].push(a);
+  });
+
+  function summarizeSport(arr) {
+    const sorted = [...arr].sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+    const last10 = sorted.slice(0, 10).map((a) => ({
+      date: a.start_date.slice(0, 10),
+      nom: a.name,
+      distance_km: +(a.distance / 1000).toFixed(1),
+      d_plus_m: Math.round(a.total_elevation_gain || 0),
+      duree_min: Math.round(a.moving_time / 60),
+      vitesse_moy_kmh: +((a.average_speed || 0) * 3.6).toFixed(1),
+      fc_moy: a.average_heartrate ? Math.round(a.average_heartrate) : null,
+      fc_max: a.max_heartrate ? Math.round(a.max_heartrate) : null,
+    }));
+    return { nombre_total: arr.length, dix_dernieres_sorties: last10 };
+  }
+
+  return {
+    velo: summarizeSport(bySport.Ride),
+    course: summarizeSport(bySport.Run),
+  };
+}
+
 // --- Génère les conseils coach via Claude et les sauvegarde. Réutilisée par le sync auto et la route manuelle. ---
 async function generateCoachAdvice(activities) {
   if (!anthropic) {
