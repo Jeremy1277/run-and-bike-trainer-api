@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
 app.use(cors());
@@ -10,13 +11,17 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const STRAVA_CLIENT_ID = process.env.STRAVA_CLIENT_ID;
 const STRAVA_CLIENT_SECRET = process.env.STRAVA_CLIENT_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://jeremy1277.github.io/gravel-trainer';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://jeremy1277.github.io/run-and-bike-trainer';
 const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+
+// --- Coach IA (Claude API) ---
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
 // --- Stockage : repo GitHub privé (Render efface le disque local à chaque mise en veille) ---
 const GITHUB_TOKEN = process.env.GITHUB_STORAGE_TOKEN; // PAT avec scope "repo"
 const GITHUB_OWNER = process.env.GITHUB_STORAGE_OWNER || 'Jeremy1277';
-const GITHUB_REPO = process.env.GITHUB_STORAGE_REPO || 'gravel-trainer-data';
+const GITHUB_REPO = process.env.GITHUB_STORAGE_REPO || 'run-and-bike-trainer-data';
 const GITHUB_BRANCH = process.env.GITHUB_STORAGE_BRANCH || 'main';
 
 const githubApi = axios.create({
@@ -66,6 +71,8 @@ async function writeJSON(filePath, data) {
 
 const TOKENS_FILE = 'tokens.json';
 const ACTIVITIES_FILE = 'activities.json';
+const EXCLUDED_FILE = 'excluded_activities.json';
+const COACH_FILE = 'coach_advice.json';
 
 function getTokens() {
   return readJSON(TOKENS_FILE, null);
@@ -188,6 +195,12 @@ app.get('/api/sync', async (req, res) => {
     await writeJSON(ACTIVITIES_FILE, { last_sync: new Date().toISOString(), activities: allActivities });
 
     res.json({ synced: allActivities.length, last_sync: new Date().toISOString() });
+
+    // Génère les conseils coach en arrière-plan, sans bloquer la réponse du sync.
+    // Ne fait planter rien si ça échoue (ex: clé API manquante) — juste loggé.
+    generateCoachAdvice(allActivities).catch((err) => {
+      console.error('Coach (arrière-plan) — erreur non bloquante:', err.response?.data || err.message);
+    });
   } catch (err) {
     if (err.message === 'NOT_CONNECTED') {
       return res.status(401).json({ error: 'not_connected' });
@@ -226,8 +239,115 @@ app.get('/api/activities/:id', async (req, res) => {
   }
 });
 
+// --- Route 7 : exclure une activité de l'analyse (doublon GPS/Strava, etc.) ---
+app.post('/api/activities/:id/exclude', async (req, res) => {
+  try {
+    const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+    const id = Number(req.params.id);
+    if (!excluded.ids.includes(id)) excluded.ids.push(id);
+    await writeJSON(EXCLUDED_FILE, excluded);
+    res.json({ excluded: excluded.ids });
+  } catch (err) {
+    console.error('Erreur exclusion:', err.response?.data || err.message);
+    res.status(500).json({ error: 'exclude_failed' });
+  }
+});
+
+// --- Route 8 : ré-inclure une activité précédemment exclue ---
+app.post('/api/activities/:id/include', async (req, res) => {
+  try {
+    const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+    const id = Number(req.params.id);
+    excluded.ids = excluded.ids.filter((x) => x !== id);
+    await writeJSON(EXCLUDED_FILE, excluded);
+    res.json({ excluded: excluded.ids });
+  } catch (err) {
+    console.error('Erreur ré-inclusion:', err.response?.data || err.message);
+    res.status(500).json({ error: 'include_failed' });
+  }
+});
+
+// --- Route 9 : liste des activités exclues ---
+app.get('/api/excluded', async (req, res) => {
+  try {
+    const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+    res.json(excluded);
+  } catch (err) {
+    console.error('Erreur lecture exclusions:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
+// --- Génère les conseils coach via Claude et les sauvegarde. Réutilisée par le sync auto et la route manuelle. ---
+async function generateCoachAdvice(activities) {
+  if (!anthropic) {
+    throw new Error('ANTHROPIC_API_KEY manquante côté serveur.');
+  }
+
+  const excluded = await readJSON(EXCLUDED_FILE, { ids: [] });
+  const summary = buildAthleteSummary(activities || [], excluded.ids || []);
+
+  const prompt = `Tu es un coach sportif expérimenté, spécialisé en cyclisme gravel et course à pied pour adultes amateurs reprenant une pratique régulière.
+
+Profil de l'athlète : 48 ans, 85 kg, pratique le gravel depuis mars 2026 (quasi débutant avant), prépare aussi un semi-marathon en octobre 2026 avec 2 sorties course/semaine. Point faible identifié : grosse perte de vitesse dès que ça grimpe (FC qui sature en montée), bonne aisance sur plat/descente.
+
+Voici ses 10 dernières sorties vélo et course (JSON) :
+${JSON.stringify(summary, null, 2)}
+
+Rédige des recommandations d'entraînement en français, tutoiement, ton direct et concret (pas de jargon inutile). Structure ta réponse ainsi :
+1. Un constat court (3-4 phrases) sur la tendance récente, vélo et course séparément si pertinent
+2. 2-3 séances concrètes à faire dans les 7-10 prochains jours (type de séance, durée, zone FC cible, objectif)
+3. Un point de vigilance (surcharge, risque de blessure, ou récupération) si tu en détectes un dans les données
+
+Reste factuel et basé sur les données fournies. Si les données sont insuffisantes pour un sport donné, dis-le simplement plutôt que d'inventer.`;
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1200,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const adviceText = message.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
+
+  const advice = {
+    generated_at: new Date().toISOString(),
+    text: adviceText,
+  };
+  await writeJSON(COACH_FILE, advice);
+  return advice;
+}
+
+// --- Route 10 : génère (ou régénère) les conseils du coach IA manuellement ---
+app.post('/api/coach/generate', async (req, res) => {
+  try {
+    const data = await readJSON(ACTIVITIES_FILE, { activities: [] });
+    const advice = await generateCoachAdvice(data.activities || []);
+    res.json(advice);
+  } catch (err) {
+    if (err.message?.includes('ANTHROPIC_API_KEY')) {
+      return res.status(503).json({ error: 'coach_not_configured', message: err.message });
+    }
+    console.error('Erreur coach:', err.response?.data || err.message);
+    res.status(500).json({ error: 'coach_failed' });
+  }
+});
+
+// --- Route 11 : récupère les derniers conseils générés (sans relancer Claude) ---
+app.get('/api/coach', async (req, res) => {
+  try {
+    const advice = await readJSON(COACH_FILE, null);
+    res.json(advice || { generated_at: null, text: null });
+  } catch (err) {
+    console.error('Erreur lecture coach:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
 app.get('/', (req, res) => {
-  res.send('Gravel Trainer API — OK');
+  res.send('Run & Bike Trainer API — OK');
 });
 
 app.listen(PORT, () => {
