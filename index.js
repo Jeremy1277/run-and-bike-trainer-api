@@ -381,17 +381,26 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après,
       "type_terrain": "plat" | "vallonne" | "montagneux",
       "duree_min": nombre en minutes,
       "zone_fc_cible": "ex: Z3 (138-155 bpm)",
-      "objectif": "1 phrase expliquant pourquoi cette séance maintenant"
+      "objectif": "1 phrase expliquant pourquoi cette séance maintenant",
+      "explication": "3-5 phrases en tutoiement expliquant le déroulé de la séance, pourquoi cette structure, et un conseil d'exécution concret",
+      "blocs": [
+        { "phase": "Échauffement", "duree_min": nombre, "zone_fc": "ex: Z1-Z2", "description": "ce qu'il faut faire pendant ce bloc" },
+        { "phase": "Bloc effort 1", "duree_min": nombre, "zone_fc": "ex: Z4", "description": "..." },
+        { "phase": "Récupération", "duree_min": nombre, "zone_fc": "ex: Z1", "description": "..." },
+        { "phase": "Retour au calme", "duree_min": nombre, "zone_fc": "ex: Z1", "description": "..." }
+      ]
     }
   ],
   "vigilance": "1-2 phrases sur un point de vigilance (surcharge, récupération, risque), ou null si rien à signaler"
 }
 
+Pour "blocs", découpe la séance en étapes chronologiques réelles (échauffement, puis répétitions d'efforts si pertinent avec leurs récup intercalées, puis retour au calme). La somme des duree_min des blocs doit être cohérente avec duree_min de la séance. Adapte le nombre de blocs à la séance (une sortie d'endurance longue peut n'avoir que 2-3 blocs, une séance de fractionné peut en avoir 6-8 en répétant le motif effort/récup).
+
 Propose entre 2 et 4 séances, dans un ordre logique de progression (la première à faire en premier). Reste factuel et basé sur les données fournies. Si les données sont insuffisantes, dis-le dans le constat plutôt que d'inventer, et propose des séances prudentes et génériques adaptées au profil.`;
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: 3000,
     messages: [{ role: 'user', content: prompt }],
   });
 
@@ -410,12 +419,27 @@ Propose entre 2 et 4 séances, dans un ordre logique de progression (la premièr
     throw new Error(`Réponse du coach IA non parsable en JSON: ${e.message}`);
   }
 
-  // Attribue un id stable à chaque séance pour pouvoir cocher/décocher côté frontend.
-  const seances = (parsed.seances || []).map((s, i) => ({
-    id: `${sport}-${Date.now()}-${i}`,
-    done: completedSeanceIds?.includes(`${sport}-${i}-${s.titre}`) || false,
-    ...s,
-  }));
+  // ID stable basé sur le contenu (sport + titre + terrain), pas sur l'horodatage :
+  // ainsi, si le coach repropose une séance similaire après un sync, son état "fait"
+  // précédent est retrouvé au lieu d'être perdu à chaque régénération automatique.
+  function stableId(sport, titre, terrain) {
+    const raw = `${sport}::${titre}::${terrain}`;
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      hash = (hash << 5) - hash + raw.charCodeAt(i);
+      hash |= 0;
+    }
+    return `${sport}-${Math.abs(hash)}`;
+  }
+
+  const seances = (parsed.seances || []).map((s) => {
+    const id = stableId(sport, s.titre, s.type_terrain);
+    return {
+      id,
+      done: !!completedSeanceIds?.[id],
+      ...s,
+    };
+  });
 
   return {
     generated_at: new Date().toISOString(),
@@ -431,11 +455,11 @@ async function generateCoachAdvice(activities) {
   const status = existing.seances_status || {};
 
   const [veloAdvice, courseAdvice] = await Promise.all([
-    generateCoachAdviceForSport('velo', activities, Object.keys(status)).catch((err) => {
+    generateCoachAdviceForSport('velo', activities, status).catch((err) => {
       console.error('Coach vélo — erreur:', err.message);
       return null;
     }),
-    generateCoachAdviceForSport('course', activities, Object.keys(status)).catch((err) => {
+    generateCoachAdviceForSport('course', activities, status).catch((err) => {
       console.error('Coach course — erreur:', err.message);
       return null;
     }),
