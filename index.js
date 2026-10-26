@@ -74,6 +74,7 @@ const ACTIVITIES_FILE = 'activities.json';
 const EXCLUDED_FILE = 'excluded_activities.json';
 const COACH_FILE = 'coach_advice.json';
 const DATE_OVERRIDES_FILE = 'date_overrides.json';
+const ENTRAINEMENT_FILE = 'entrainement.json';
 
 function getTokens() {
   return readJSON(TOKENS_FILE, null);
@@ -535,6 +536,102 @@ app.post('/api/coach/seance/:id/toggle', async (req, res) => {
   } catch (err) {
     console.error('Erreur toggle séance:', err.response?.data || err.message);
     res.status(500).json({ error: 'toggle_failed' });
+  }
+});
+
+// --- Entraînement : réglages de l'objectif, objectifs hebdo figés, journal de séance ---
+// Un seul fichier, trois parties, parce que le front les lit toujours ensemble :
+//   reglages : date / nom / D+ de l'épreuve, année de naissance, correction natation
+//   semaines : { "2026-10-19": { figee, phase, allegee, cibles: { natation, velo, course } } }
+//   journal  : { "<id d'activité Strava>": { quand, ressenti, jambes, douleur, mouvements, note } }
+const ENTRAINEMENT_VIDE = { reglages: {}, semaines: {}, journal: {} };
+const LUNDI_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function lireEntrainement() {
+  return readJSON(ENTRAINEMENT_FILE, ENTRAINEMENT_VIDE).then((d) => ({ ...ENTRAINEMENT_VIDE, ...d }));
+}
+// Garde un objet plat de valeurs simples : ni fonctions, ni objets imbriqués trop profonds.
+function objetPlat(o, profondeur = 2) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return {};
+  const r = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (typeof k !== 'string' || k.length > 60) continue;
+    if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) {
+      r[k] = typeof v === 'string' ? v.slice(0, 500) : v;
+    } else if (typeof v === 'object' && profondeur > 0) {
+      r[k] = objetPlat(v, profondeur - 1);
+    }
+  }
+  return r;
+}
+
+app.get('/api/entrainement', async (req, res) => {
+  try {
+    res.json(await lireEntrainement());
+  } catch (err) {
+    console.error('Erreur lecture entraînement:', err.response?.data || err.message);
+    res.status(500).json({ error: 'read_failed' });
+  }
+});
+
+app.put('/api/entrainement/reglages', async (req, res) => {
+  try {
+    const d = await lireEntrainement();
+    d.reglages = objetPlat(req.body);
+    await writeJSON(ENTRAINEMENT_FILE, d);
+    res.json(d.reglages);
+  } catch (err) {
+    console.error('Erreur réglages:', err.response?.data || err.message);
+    res.status(500).json({ error: 'write_failed' });
+  }
+});
+
+// Les objectifs d'une semaine ne se figent qu'une fois : la première écriture
+// gagne, les suivantes renvoient ce qui a été figé. ?force=1 pour réécrire
+// (changement de date d'épreuve en cours de semaine, par exemple).
+app.put('/api/entrainement/semaines/:lundi', async (req, res) => {
+  try {
+    const lundi = req.params.lundi;
+    if (!LUNDI_RE.test(lundi)) return res.status(400).json({ error: 'invalid_week' });
+    const d = await lireEntrainement();
+    if (d.semaines[lundi] && req.query.force !== '1') {
+      return res.json({ lundi, semaine: d.semaines[lundi], deja: true });
+    }
+    d.semaines[lundi] = { ...objetPlat(req.body, 3), figee: new Date().toISOString() };
+    // on ne garde que les 60 dernières semaines : le fichier reste petit
+    const cles = Object.keys(d.semaines).sort();
+    for (const c of cles.slice(0, Math.max(0, cles.length - 60))) delete d.semaines[c];
+    await writeJSON(ENTRAINEMENT_FILE, d);
+    res.json({ lundi, semaine: d.semaines[lundi], deja: false });
+  } catch (err) {
+    console.error('Erreur semaine:', err.response?.data || err.message);
+    res.status(500).json({ error: 'write_failed' });
+  }
+});
+
+app.put('/api/entrainement/journal/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id).slice(0, 30);
+    const d = await lireEntrainement();
+    d.journal[id] = { ...objetPlat(req.body), quand: new Date().toISOString() };
+    await writeJSON(ENTRAINEMENT_FILE, d);
+    res.json({ id, entree: d.journal[id] });
+  } catch (err) {
+    console.error('Erreur journal:', err.response?.data || err.message);
+    res.status(500).json({ error: 'write_failed' });
+  }
+});
+
+app.delete('/api/entrainement/journal/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id).slice(0, 30);
+    const d = await lireEntrainement();
+    delete d.journal[id];
+    await writeJSON(ENTRAINEMENT_FILE, d);
+    res.json({ id });
+  } catch (err) {
+    console.error('Erreur journal:', err.response?.data || err.message);
+    res.status(500).json({ error: 'write_failed' });
   }
 });
 
